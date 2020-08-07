@@ -1,0 +1,38 @@
+#include "services_dune.fcl"
+
+process_name: CalibCosmicsAna
+
+services:
+{
+   TFileService: { fileName: "CalibCosmicsAnaHist.root" }
+   TimeTracker: {}
+   @table::protodune_simulation_services
+}
+
+source:
+{
+   module_type: RootInput
+   maxEvents: -1
+}
+
+outputs: {}
+
+
+physics:
+{
+   analyzers:
+   {
+      CalibCosmicsAna:
+      {
+	 module_type: "CalibCosmicsAna"
+	 SimModuleLabel: "largeant"
+	 HitModuleLabel: "linecluster"
+	 RecoTrackModuleLabel: "pandoraTrack"
+	 CaloModuleLabel: "pandoracalo"
+      }
+   }
+
+   analysis: [ CalibCosmicsAna ]
+   end_paths: [ analysis ]
+
+}
