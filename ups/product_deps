@@ -34,7 +34,7 @@ flcdir  product_dir     fcl
 product          version
 dunetpc      v08_60_00
 larsoft      v08_60_00
-cetbuildtools    v7_12_01  -  only_for_build
+cetbuildtools    v7_15_01  -  only_for_build
 end_product_list
 
 # We now define allowed qualifiers and the corresponding qualifiers for the depdencies.
