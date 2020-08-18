@@ -6,7 +6,7 @@ services:
 {
    TFileService: { fileName: "CalibCosmicsAnaHist.root" }
    TimeTracker: {}
-   @table::protodune_simulation_services
+   @table::dunefd_simulation_services
 }
 
 source:
