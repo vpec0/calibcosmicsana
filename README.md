@@ -7,7 +7,7 @@ This code is to be used by analyzers from the DUNE calibration working group who
 
 The code contains a LArSoft analyser module to be used to create a common ntuple(s) for the calibration-related studies.
 
-At the moment, the analyser creates a simple ntuple from my old analyser attempt, but this should be rewritten, and contents of the ntuple should be discussed by all interested parties.
+At the moment, the analyser creates the 1st version of a simple ntuple good for use in electron lifetime study. Contents of the ntuple should be discussed by all interested parties.
 
 I chose to make this package separate from dunetpc for the sake of ease of use, but, of course, the product depends on `dunetpc` (and consequently on `larsoft`).
 
@@ -18,10 +18,12 @@ I chose to make this package separate from dunetpc for the sake of ease of use, 
 mkdir testdev # use any name you desire
 cd testdev/
 source /cvmfs/dune.opensciencegrid.org/products/dune/setup_dune.sh
-setup dunetpc v08_60_00 -q e19:prof
+setup dunetpc v09_05_00 -q e19:prof
 mrb newDev
 . localProducts_larsoft_*/setup
-mrb g calibcosmicsana%ssh://git@github.com/vpec0/calibcosmicsana.git
+mrb g calibcosmicsana%ssh://git@github.com/vpec0/calibcosmicsana.git 
+# or one can use https protocol instead:
+# mrb g https://github.com/vpec0/calibcosmicsana
 mrbsetenv
 mrb i
 ```
