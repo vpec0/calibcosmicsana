@@ -2,9 +2,12 @@
 art_make(LIB_LIBRARIES nusimdata_SimulationBase
   MODULE_LIBRARIES larsim_Simulation
   lardataobj_Simulation
+  lardataobj_RecoBase
   larcoreobj_SummaryData
   larcorealg_Geometry
   larcore_Geometry_Geometry_service
+  larsim_MCCheater_BackTrackerService_service
+  larsim_MCCheater_ParticleInventoryService_service
   #nutools_RandomUtils_NuRandomService_service
   larsim_EventGenerator
   nusimdata_SimulationBase

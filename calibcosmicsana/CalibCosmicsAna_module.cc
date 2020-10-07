@@ -23,6 +23,13 @@
 
 #include "art_root_io/TFileService.h"
 
+#include "larsim/MCCheater/BackTrackerService.h"
+#include "larsim/MCCheater/ParticleInventoryService.h"
+
+#include "lardata/DetectorInfoServices/DetectorPropertiesService.h"
+#include "lardataalg/DetectorInfo/DetectorClocksData.h"
+
+
 #include "nusimdata/SimulationBase/MCParticle.h"
 #include "nusimdata/SimulationBase/MCTruth.h"
 
@@ -35,8 +42,12 @@
 #include "TH1.h"
 #include "TH2.h"
 #include "TTree.h"
+
+#include "CalibCosmicsEvent.h"
+
 class CalibCosmicsAna;
 
+using namespace std;
 
 class CalibCosmicsAna : public art::EDAnalyzer {
 public:
@@ -61,9 +72,22 @@ public:
 private:
     bool insideTPC(const TVector3& pos);
     void GetTPClimits();
+    double length(const simb::MCParticle& p,
+		  TLorentzVector& start, TLorentzVector& end,
+		  unsigned int &starti, unsigned int &endi,
+		  float *dedx, float* pos);
 
-    void analyzeMC(art::Event const& e);
-    void analyzeReco(art::Event const& e);
+    int analyzeMC(detinfo::DetectorClocksData const& clockData, art::Event const& e);
+    int analyzeReco(detinfo::DetectorClocksData const& clockData, art::Event const& e);
+
+    const std::vector<const recob::Hit*>
+    GetRecoTrackHits(const recob::Track &track,
+		     art::Event const &evt) const;
+
+    std::vector<std::pair<const simb::MCParticle*, double> >
+    GetMCParticleListFromRecoTrack(detinfo::DetectorClocksData const& clockData,
+				   const recob::Track &track,
+    				   art::Event const & evt) const;
 
 private:
     // Declare member data here.
@@ -78,36 +102,14 @@ private:
     int fRun;
     int fSubRun;
 
-    TH1* fLengthHist;
-    TH1* fDedxVsX;
-    TH1* fDedxVsY;
-    TH1* fDedxVsZ;
-
     /// Flat tree to store info of primary muon which enters TPC
     TTree* fTree;
 
-    struct Muon_t {
-	double genPos[4];
-	double genMom[4];
-	double startPos[4]; /// where the muon entered the active TPC volume
-	double endPos[4]; /// where the muon stopped or left the active TPC volume
-	double startMom[4]; /// momentum at where the muon entered the active TPC volume
-	double endMom[4]; /// momentum at where the muon stopped or left the active TPC volume
-	unsigned short exited;
-
-	unsigned int n_sp;
-	double sp_pos[fMaxTrajPoints][3]; /// positions of individual
-					  /// trajectory spacepoints
-					  /// inside the active volume
-					  /// of the TPC
-	double sp_en[fMaxTrajPoints]; /// energy at individual spacepoints
-	double dedx[fMaxTrajPoints];
-	double dedx_pos[fMaxTrajPoints][3];
-
-	std::string endProcess;
-    } fMuon;
+    CalibCosmicsEvent fCosmicEvent;
 
     geo::GeometryCore const* fGeometryService;
+
+    double ActiveBounds[6]; // Cryostat boundaries ( neg x, pos x, neg y, pos y, neg z, pos z )
 
     double fXmin;
     double fXmax;
@@ -154,57 +156,36 @@ void CalibCosmicsAna::beginJob()
 {
     art::ServiceHandle<art::TFileService const> tfs;
 
-    fLengthHist = tfs->make<TH1D>("length", ";Trajectory length [cm]", 220, 0, 1100);
-
-    fDedxVsX = tfs->make<TH2D>("dedxvsx", ";X [cm];dE/dx [MeV/cm]", 20, fXmin, fXmax, 100, 0., 5.);
-    fDedxVsY = tfs->make<TH2D>("dedxvsy", ";Y [cm];dE/dx [MeV/cm]", 20, fYmin, fYmax, 100, 0., 5.);
-    fDedxVsZ = tfs->make<TH2D>("dedxvsz", ";Z [cm];dE/dx [MeV/cm]", 23, fZmin, fZmax, 100, 0., 5.);
-
-
     fTree = tfs->make<TTree>("muon_tree", "Truth data for all cosmic muons entering the TPC");
 
-    fTree -> Branch("Event" , &fEvent , "Event/I");
-    fTree -> Branch("Run"   , &fRun   , "Run/I");
-    fTree -> Branch("SubRun", &fSubRun, "SubRun/I");
-
-    fTree -> Branch("genPos", fMuon.genPos, "genPos[4]/D");
-    fTree -> Branch("genMom", fMuon.genMom, "genMom[4]/D");
-
-    fTree -> Branch("startPos", fMuon.startPos, "startPos[4]/D");
-    fTree -> Branch("endPos", fMuon.endPos, "endPos[4]/D");
-    fTree -> Branch("startMom", fMuon.startMom, "startMom[4]/D");
-    fTree -> Branch("endMom", fMuon.endMom, "endMom[4]/D");
-    fTree -> Branch("exited", &fMuon.exited, "exited/s");
-
-    fTree -> Branch("n_points", &fMuon.n_sp, "n_points/i");
-    fTree -> Branch("sp_pos", fMuon.sp_pos, "sp_pos[n_points][3]/D");
-    fTree -> Branch("sp_en", fMuon.sp_en, "sp_en[n_points]/D");
-    fTree -> Branch("dedx", fMuon.dedx, "dedx[n_points]/D");
-    fTree -> Branch("dedx_pos", fMuon.dedx_pos, "dedx_pos[n_points][3]/D");
-
-    fTree -> Branch("endProcess", &fMuon.endProcess);
+    createBranches(fTree, &fCosmicEvent);
 }
 
 
 void CalibCosmicsAna::analyze(art::Event const& e)
 {
+    auto const clockData = art::ServiceHandle<detinfo::DetectorClocksService>()->DataFor(e);
+    auto const detProp =  art::ServiceHandle<detinfo::DetectorPropertiesService>()->DataFor(e, clockData);
+
   // Implementation of required member function here.
     fEvent = e.id().event();
     fRun = e.run();
     fSubRun = e.subRun();
 
+    fCosmicEvent.event = fEvent;
+    fCosmicEvent.subRun = fSubRun;
+    fCosmicEvent.run = fRun;
 
-    analyzeMC(e);
-    analyzeReco(e);
+    if (! analyzeMC(clockData, e) ) // primary muon did not make it into TPC
+	return;
+    if (! analyzeReco(clockData, e) ) // no reconstruction?
+	return;
 
-
-    // std::cout<<"Event: "<<fEvent<<" Run: "<<fRun<<" SubRun: "<<fSubRun<<std::endl
-    // 	     <<"Total number of primary muons: "<<total_muons<<std::endl
-    // 	     <<"Of which only "<<tpc_crossers<<" entered the TPC"<<std::endl
-    // 	     <<"Out of "<<particleHandle->size()<<" simulated particles"<<std::endl;
+    // Fill MC and Reco info of this event
+    fTree->Fill();
 }
 
-void CalibCosmicsAna::analyzeMC(art::Event const& e)
+int CalibCosmicsAna::analyzeMC(detinfo::DetectorClocksData const& clockData, art::Event const& e)
 {
     art::Handle< std::vector<simb::MCParticle> > particleHandle;
     // Then tell the event to fill the vector with all the objects of
@@ -226,7 +207,6 @@ void CalibCosmicsAna::analyzeMC(art::Event const& e)
 	    // be displayed.
 	    //
 	    // __LINE__ and __FILE__ are values computed by the compiler.
-
 	    throw cet::exception("AnalysisExample")
 		<< " No simb::MCParticle objects in this event - "
 		<< " Line " << __LINE__ << " in file " << __FILE__ << std::endl;
@@ -235,105 +215,61 @@ void CalibCosmicsAna::analyzeMC(art::Event const& e)
     int total_muons = 0;
     int tpc_crossers = 0;
     for ( auto const& particle: (*particleHandle) ) {
-	// check if this is a cosmic muon
-	//   - muon which originates outside the TPC
-	//   - and is a primary particle
-	if ( TMath::Abs(particle.PdgCode()) != 13 ) continue;
-	if ( insideTPC(particle.Position().Vect()) ) continue;
+	// check if this is the primary muon
 	if ( particle.Process() != "primary" ) continue;
+	if ( TMath::Abs(particle.PdgCode()) != 13 ) continue;
+	//if ( insideTPC(particle.Position().Vect()) ) continue;
 
 	total_muons++;
 
 	auto traj = particle.Trajectory();
 
+	TLorentzVector mcstart, mcend;
+	unsigned int pstarti, pendi; //mcparticle indices for starts and ends in tpc or drifted volumes
+	// check for trajectory's length within TPC, and get start and end position, and index of 1st and last point in TPC
+	double plen = length(particle, mcstart, mcend, pstarti, pendi,
+			     fCosmicEvent.mc_dedx_tpcAV, (float*)fCosmicEvent.mc_pos_tpcAV);
+	fCosmicEvent.mc_ntrajpoints_tpcAV = pendi - pstarti + 1;
+
 	// find whether it has entered the TPC and where
 	auto it = traj.begin(); // iterator is a pointer to a pair of 2 TLorentzVectors, pos, mom
 	// store generated position and momentum
-	it->first.GetXYZT(fMuon.genPos);
-	it->second.GetXYZT(fMuon.genMom);
+	it->first.GetXYZT(fCosmicEvent.gen_pos);
+	it->second.GetXYZT(fCosmicEvent.gen_mom);
 
-	for (; it != traj.end(); it++)
-	    if ( insideTPC(it->first.Vect()) ) break;
-
-	if ( it == traj.end() ) // muon did not cross the TPC
-	    continue;
+	if ( plen == 0. ) // muon did not enter the TPC
+	    return 0;
 
 	tpc_crossers++;
 
-	// need to loop over all trajectory points, check if the point
-	// is within the TPC, calculate distance between points,
-	// energy loss and total travelled distance from entering the
-	// TPC
+	// save position of muon's entry and exit of TPC
+	mcstart.GetXYZT(fCosmicEvent.mc_startPoint_tpcAV);
+	mcstart.GetXYZT(fCosmicEvent.mc_startMom_tpcAV);
+	mcend.GetXYZT(fCosmicEvent.mc_endPoint_tpcAV);
+	mcend.GetXYZT(fCosmicEvent.mc_endMom_tpcAV);
 
-        double lastEnergy = it->second.E(); // energy in GeV
-	TVector3 lastPos = it->first.Vect(); // spatial dimensions in cm
-	bool exited = false;
-	double len = 0.;
-	// std::cout<<total_muons<<"th muon is crossing and has "<<traj.size()<<" trajectory points"<<std::endl
-	// 	 <<"Initial energy at entering the TPC: "<<lastEnergy<<std::endl
-	// 	 <<"And entering at ";
-	// lastPos.Print();
-
-	it->first.GetXYZT(fMuon.startPos);
-	it->second.GetXYZT(fMuon.startMom);
-
-	fMuon.n_sp = 0;
-	it++;
-	for (; it != traj.end(); it++) {
-	    // first check if we are still inside the TPC
-	    TVector3 pos (it->first.Vect());
-	    if (!insideTPC(pos)) break;
-
-	    double de = lastEnergy - it->second.E(); // GeV
-	    double dx = (lastPos - pos).Mag(); // cm
-
-	    TVector3 dedx_pos(lastPos + (pos - lastPos)*0.5);
-	    double dedx = de*1e3/dx;
-	    fDedxVsX -> Fill (pos.X(),dedx);
-	    fDedxVsY -> Fill (pos.Y(),dedx);
-	    fDedxVsZ -> Fill (pos.Z(),dedx);
-
-
-	    lastEnergy = it->second.E();
-	    lastPos = pos;
-
-	    len += dx;
-
-	    pos.GetXYZ(fMuon.sp_pos[fMuon.n_sp]);
-	    fMuon.sp_en[fMuon.n_sp] = it->second.E();
-	    fMuon.dedx[fMuon.n_sp] = dedx;
-	    dedx_pos.GetXYZ(fMuon.dedx_pos[fMuon.n_sp]);
-	    fMuon.n_sp++;
-	}
-	if (it != traj.end()) {
-	    fMuon.endProcess = "exit";
-	    exited = true;
+	// test last position in TPC
+	auto endit = traj.begin() + pendi + 1;
+	if (endit != traj.end()) {
+	    fCosmicEvent.mc_endProcess_tpcAV = "exit";
+	    fCosmicEvent.mc_exited_tpcAV = 1;
 	} else {
-	    fMuon.endProcess = particle.EndProcess();
+	    fCosmicEvent.mc_endProcess_tpcAV = particle.EndProcess();
+	    fCosmicEvent.mc_exited_tpcAV = 0;
 	}
-	fMuon.exited = exited;
 
+	// fill trajectory length
+	fCosmicEvent.mc_length_tpcAV = plen;
 
-	// std::cout<<"Particle process: "<< particle.Process()<<std::endl;
-	// std::cout<<"Particle end process: "<< particle.EndProcess()<<std::endl;
-
-	it--; // return to the last inside position of the trajectory
-	it->first.GetXYZT(fMuon.endPos);
-	it->second.GetXYZT(fMuon.endMom);
-
-	fTree->Fill();
-
-	fLengthHist->Fill(len);
+	// found primary muon and it entered the TPC
+	return 1;
     }
-
+    return 0;
 }
 
-using namespace std;
 
-void CalibCosmicsAna::analyzeReco(art::Event const& evt)
+int CalibCosmicsAna::analyzeReco(detinfo::DetectorClocksData const& clockData, art::Event const& evt)
 {
-    // static const int int_max = std::numeric_limits<int>::max();
-
     /// Retrieves reconstructed tracks
     art::Handle< std::vector<recob::Track> >  trackListHandle;
     std::vector<art::Ptr<recob::Track> > tracklist;
@@ -341,119 +277,80 @@ void CalibCosmicsAna::analyzeReco(art::Event const& evt)
     if ( evt.getByLabel(fRecoTrackModuleLabel, trackListHandle) )
 	art::fill_ptr_vector(tracklist, trackListHandle);
 
-    cout<<"Run "<<fRun<<" event "<<fEvent<<endl;
-    cout<<"Number of tracks: "<<tracklist.size()<<endl;
+    size_t ntracks = tracklist.size();
+    fCosmicEvent.reco_nTracks = ntracks;
+
+
+    // Fill in basic info about each track
+    for (size_t i = 0; i < ntracks; i++) {
+	auto track = tracklist.at(i);
+	auto start = track->Start();
+	auto end = track->End();
+
+	start.GetCoordinates(fCosmicEvent.reco_startPoint[i]);
+	end.GetCoordinates(fCosmicEvent.reco_endPoint[i]);
+
+	fCosmicEvent.reco_length[i] = track->Length();
+
+
+	std::vector<std::pair<const simb::MCParticle*, double> > mc_parts =
+	    GetMCParticleListFromRecoTrack(clockData, *track, evt);
+
+	fCosmicEvent.reco_mcpdg[i] = mc_parts[0].first->PdgCode();
+    }
 
 
 
-    /// Get hits associated with the track
-    /// Prepare map for each track of hit's trajectory-point index and pointer to the hit
-    std::vector< std::map< size_t, art::Ptr<recob::Hit> > > vmtpi2h;
-
-    cout<<"Hits:"<<endl;
+    /// Get hits list of all hits
     art::Handle< std::vector<recob::Hit> >  hitListHandle;
     std::vector<art::Ptr<recob::Hit> > hitList;
-
     if ( evt.getByLabel(fHitModuleLabel, hitListHandle) )
-	art::fill_ptr_vector(hitList, hitListHandle);
-    cout<<"Total hits stored: "
-	<<hitList.size()<<endl;
+    	art::fill_ptr_vector(hitList, hitListHandle);
 
-
-
-    cout<<"Total hits in each track: ";
-    art::FindManyP<recob::Hit> fmth(trackListHandle, evt, fRecoTrackModuleLabel);
-    if (fmth.isValid()) {
-	for (size_t i = 0; i < fmth.size(); i++) {
-	    cout<<fmth.at(i).size()<<" ";
-	}
-    }
-    cout<<endl;
-
-    // art::FindManyP<recob::Hit, recob::TrackHitMeta> fmthm(trackListHandle, evt, fRecoTrackModuleLabel);
-    // if (fmthm.isValid()) {
-    // 	cout<<"Found hits for "<<fmthm.size()<<" tracks."<<endl;
-    // 	cout<<"Number of hits in each track: "<<endl;
-    // 	for (size_t i = 0; i < fmthm.size(); i++) {
-    // 	    vmtpi2h.push_back(std::map< size_t, art::Ptr<recob::Hit> >());
-    // 	    std::map< size_t, art::Ptr<recob::Hit> > &mtpi2h = vmtpi2h.back();
-
-    // 	    auto vhits = fmthm.at(i);
-    // 	    auto vmeta = fmthm.data(i);
-    // 	    cout<<vhits.size()<<endl;
-
-    // 	    size_t end = vhits.size();
-    // 	    for (size_t ihit = 0; ihit < end; ++ihit) {
-    // 		if (vmeta.at(ihit)->Index() == int_max) continue;
-    // 		mtpi2h[vmeta.at(ihit)->Index()] = vhits.at(ihit);
-    // 	    }
-    // 	}
-    // }
-
-
-
-    /// Get calorimetry for each track
+    // Get calorimetry for each track
     art::FindManyP<anab::Calorimetry> fmcal(trackListHandle, evt, fCaloModuleLabel);
-    cout<<"Calorimetry:"<<endl;
     if (fmcal.isValid()) {
-	cout<<"Found calorimetry for "<<fmcal.size()<<" tracks."<<endl;
-	cout<<"Number of calo points in each track: "<<endl;
+	// loop over calorimetry by track
 	for (size_t i = 0; i < fmcal.size(); i++) {
 	    auto calos = fmcal.at(i);
-	    cout<<"(";
-	    size_t total = 0;
-	    for (size_t iplane = 0; iplane <3; ++iplane) {
-		total += calos.at(iplane)->dEdx().size();
-		cout<<calos.at(iplane)->dEdx().size()<<",";
-	    }
-	    cout <<")"
-		 <<" Total "<<total<<endl;
-	    // cout<<"Number of hits associated to this tracks TPs: "
-	    // 	<<vmtpi2h[i].size()<<endl;
-	    cout<<"Number of TPs stored in this track: "
-		<<tracklist[i]->NPoints()<<endl;
-
-	    // cout<<"TP indices of associated hits: "<<endl;
-	    // for (auto hit_pair : vmtpi2h[i]) {
-	    // 	cout<<"("<<hit_pair.first<<", "
-	    // 	    <<hit_pair.second->WireID()<<") ";
-	    // }
-	    // cout<<endl;
-
-	    // cout<<"TP indices of calorimetry points: "<<endl;
-	    // for (auto calo : calos) {
-	    // 	cout<<calo->PlaneID()<<" ";
-	    // 	for (auto idx : calo->TpIndices()) {
-	    // 	    cout<<idx<<" ";
-	    // 	}
-	    // 	cout<<endl;
-	    // }
-	    // cout<<endl;
-
-
-	    cout<<"First 10 calopoints in each plane:"<<endl;
+	    // loop over calorimetry by plane
 	    for (auto calo : calos) {
 	    	size_t end = calo->TpIndices().size();
-	    	if (end > 10) end = 10;
-	    	if (end)
-	    	    cout<<"Plane "<<calo->PlaneID()<<": ";
+		int plane = calo->PlaneID().Plane;
 
+		fCosmicEvent.reco_nPoints[i][plane] = end;
+		// loop over calo points
 	    	for (size_t ipt = 0; ipt < end; ++ipt) {
+		    // hit related info
 	    	    size_t tpidx = calo->TpIndices().at(ipt);
-	    	    auto hit = hitList[tpidx];
+	    	    auto hit = hitList[tpidx]; // assuming trajectory point index is equal to index in hit list...
+		    int tpc = hit->WireID().TPC;
+		    float thit = hit->PeakTime();
+
+		    // calorimetry info
 		    float dqdx = calo->dQdx().at(ipt);
+		    float dedx = calo->dEdx().at(ipt);
+		    float resrange = calo->ResidualRange().at(ipt);
 		    float pitch = calo->TrkPitchVec().at(ipt);
-	    	    cout<<"("<<tpidx
-	    		<<", "<<(dqdx*pitch)
-	    		<<", "<<hit->WireID()
-	    		<<", "<<hit->Integral()<<") ";
+
+		    // save calo info into the event struct
+		    fCosmicEvent.reco_dqdx[i][plane][ipt] = dqdx;
+		    fCosmicEvent.reco_dedx[i][plane][ipt] = dedx;
+		    fCosmicEvent.reco_resrange[i][plane][ipt] = resrange;
+		    fCosmicEvent.reco_pitch[i][plane][ipt] = pitch;
+		    // set position of the calo point and time of the hit
+		    calo->XYZ().at(ipt).GetCoordinates(fCosmicEvent.reco_point[i][plane][ipt]);
+		    fCosmicEvent.reco_point[i][plane][ipt][3] = thit;
+		    fCosmicEvent.reco_pointtpc[i][plane][ipt] = tpc;
 	    	}
-	    	cout<<endl;
 	    }
 	}
-	cout<<endl;
     }
 
+    fCosmicEvent.reco_nTracks = ntracks;
+
+
+    return 1;
 }
 
 bool CalibCosmicsAna::insideTPC(const TVector3& pos)
@@ -471,6 +368,7 @@ bool CalibCosmicsAna::insideTPC(const TVector3& pos)
 
 void CalibCosmicsAna::GetTPClimits()
 {
+    // Don't remember where I got this definition of the active region.
     std::cout << "----> HERE!!!!: N TPCs: " << fGeometryService->NTPC() << std::endl;
     std::cout << fGeometryService->DetectorName() << std::endl;
 
@@ -499,6 +397,157 @@ void CalibCosmicsAna::GetTPClimits()
 	      << "min Y: " << fYmin << "max Y: " << fYmax << std::endl
 	      << "min Z: " << fZmin << "max Z: " << fZmax << std::endl;
 
+
+    // Taken from dune::AnalysisTree, this definition of active region
+    // extends about 8 cm further along drift coordinate on both sides
+    //
+    // Build my Cryostat boundaries array...Taken from Tyler Alion in
+    // Geometry Core. Should still return the same values for uBoone.
+    ActiveBounds[0] = ActiveBounds[2] = ActiveBounds[4] = DBL_MAX;
+    ActiveBounds[1] = ActiveBounds[3] = ActiveBounds[5] = -DBL_MAX;
+    // assume single cryostats
+    auto const* geom = lar::providerFrom<geo::Geometry>();
+    for (geo::TPCGeo const& TPC: geom->IterateTPCs()) {
+	// get center in world coordinates
+	double origin[3] = {0.};
+	double center[3] = {0.};
+	TPC.LocalToWorld(origin, center);
+	double tpcDim[3] = {TPC.HalfWidth(), TPC.HalfHeight(), 0.5*TPC.Length() };
+
+	if( center[0] - tpcDim[0] < ActiveBounds[0] ) ActiveBounds[0] = center[0] - tpcDim[0];
+	if( center[0] + tpcDim[0] > ActiveBounds[1] ) ActiveBounds[1] = center[0] + tpcDim[0];
+	if( center[1] - tpcDim[1] < ActiveBounds[2] ) ActiveBounds[2] = center[1] - tpcDim[1];
+	if( center[1] + tpcDim[1] > ActiveBounds[3] ) ActiveBounds[3] = center[1] + tpcDim[1];
+	if( center[2] - tpcDim[2] < ActiveBounds[4] ) ActiveBounds[4] = center[2] - tpcDim[2];
+	if( center[2] + tpcDim[2] > ActiveBounds[5] ) ActiveBounds[5] = center[2] + tpcDim[2];
+    } // for all TPC
+    std::cout << "Active Boundaries: "
+	      << "\n\tx: " << ActiveBounds[0] << " to " << ActiveBounds[1]
+	      << "\n\ty: " << ActiveBounds[2] << " to " << ActiveBounds[3]
+	      << "\n\tz: " << ActiveBounds[4] << " to " << ActiveBounds[5]
+	      << std::endl;
+}
+
+// Length of MC particle, trajectory by trajectory (with out the manual shifting for x correction)
+// and fill in dE/dx and positions at each point in TPC
+// Taken from dune::AnalysisTree
+double CalibCosmicsAna::length(const simb::MCParticle& p,
+			       TLorentzVector& start, TLorentzVector& end,
+			       unsigned int &starti, unsigned int &endi,
+			       float *dedx_arr, float* pos_arr)
+{
+    double result = 0.;
+    TVector3 disp;
+    bool first = true;
+
+    TLorentzVector lastPos; // energy in GeV
+    double lastEnergy = 0.; // energy in GeV
+    double dedx = 0.;
+
+    int tpindex = 0;
+
+    for(unsigned int i = 0; i < p.NumberTrajectoryPoints(); ++i) {
+	// check if the particle is inside a TPC
+	if (p.Vx(i) >= ActiveBounds[0] && p.Vx(i) <= ActiveBounds[1] && p.Vy(i) >= ActiveBounds[2] && p.Vy(i) <= ActiveBounds[3] && p.Vz(i) >= ActiveBounds[4] && p.Vz(i) <= ActiveBounds[5]){
+	    if(first){
+		start = p.Position(i);
+		first = false;
+		starti = i;
+		lastPos = start;
+		lastEnergy = p.E(i);
+	    }else{
+		disp -= p.Position(i).Vect();
+		result += disp.Mag();
+	    }
+	    // calculate truth based dE/dx
+	    double de = lastEnergy - p.E(i); // GeV
+	    TLorentzVector pos (p.Position(i));
+	    double dx = (lastPos.Vect() - pos.Vect()).Mag(); // cm
+	    if (dx == 0.)
+		dedx = 0.;
+	    else
+		dedx = de*1e3/dx; // MeV/cm
+
+	    lastPos = pos;
+	    lastEnergy = p.E(i);
+
+	    dedx_arr[tpindex] = dedx;
+	    pos.GetXYZT(pos_arr+4*tpindex);
+	    tpindex++;
+
+	    disp = p.Position(i).Vect();
+	    end = p.Position(i);
+	    endi = i;
+	}
+    }
+    return result;
+}
+
+// code taken from protoana::ProtoDUNETrackUtils
+const std::vector<const recob::Hit*>
+CalibCosmicsAna::GetRecoTrackHits(const recob::Track &track,
+				  art::Event const &evt) const
+{
+
+    auto recoTracks = evt.getValidHandle<std::vector<recob::Track> >(fRecoTrackModuleLabel);
+    art::FindManyP<recob::Hit> findHits(recoTracks,evt,fRecoTrackModuleLabel);
+    std::vector<art::Ptr<recob::Hit>> inputHits = findHits.at(track.ID());
+
+    std::vector<const recob::Hit*> trackHits;
+
+    for(const art::Ptr<recob::Hit> hit : inputHits){
+
+	trackHits.push_back(hit.get());
+
+    }
+
+    return trackHits;
+
+}
+
+// code taken from protoana::ProtoDUNETruthUtils: GetMCParticleListFromRecoTrack and GetMCParticleListFromTrackHits
+std::vector<std::pair<const simb::MCParticle*, double> >
+CalibCosmicsAna::GetMCParticleListFromRecoTrack(detinfo::DetectorClocksData const& clockData,
+						const recob::Track &track,
+						art::Event const & evt) const
+{
+    // We must have MC for this module to make sense
+    if(evt.isRealData()) return {};
+
+    // Get the reconstructed track hits
+    std::vector<const recob::Hit*> trackHits = GetRecoTrackHits(track, evt);
+
+
+   using weightedMCPair = std::pair<const simb::MCParticle*, double>;
+   std::vector<weightedMCPair> outVec;
+
+   // Loop over all hits in the input vector and record the contributing MCParticles.
+   art::ServiceHandle<cheat::BackTrackerService> bt_serv;
+   art::ServiceHandle<cheat::ParticleInventoryService> pi_serv;
+   std::unordered_map<const simb::MCParticle*, double> mcEMap;
+   double hitTotalE = 0;
+   for(const recob::Hit* hitp : trackHits) {
+       for(const sim::TrackIDE& ide : bt_serv->HitToTrackIDEs(clockData, *hitp)) {
+	   const simb::MCParticle* curr_part = pi_serv->TrackIdToParticle_P(ide.trackID);
+	   mcEMap[curr_part] += ide.energy;
+	   hitTotalE += ide.energy;
+       }
+   }
+
+   // Fill and sort the output vector
+   for (weightedMCPair const& p : mcEMap) {
+       outVec.push_back(p);
+   }
+   std::sort(outVec.begin(), outVec.end(),
+	     [](weightedMCPair a, weightedMCPair b){ return a.second > b.second;});
+
+   // Normalise the weights by the total track energy.
+   if (hitTotalE < 1e-5) { hitTotalE = 1; } // Protect against zero division
+   for (weightedMCPair& p : outVec) {
+       p.second /= hitTotalE;
+   }
+
+   return outVec;
 
 }
 
