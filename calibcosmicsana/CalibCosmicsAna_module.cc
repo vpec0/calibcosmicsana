@@ -278,8 +278,15 @@ int CalibCosmicsAna::analyzeReco(detinfo::DetectorClocksData const& clockData, a
 	art::fill_ptr_vector(tracklist, trackListHandle);
 
     size_t ntracks = tracklist.size();
-    fCosmicEvent.reco_nTracks = ntracks;
 
+    // test number of track in order not to overflow allocated memory
+    if (ntracks > MAX_RECO_TRACKS) {
+	cout<<"CalibCosmicsAna: WARNING: Event "
+	    <<" has "<<ntracks<<" reconstructed tracks. Will only store "<<MAX_RECO_TRACKS<<endl;
+	ntracks = MAX_RECO_TRACKS;
+    }
+
+    fCosmicEvent.reco_nTracks = ntracks;
 
     // Fill in basic info about each track
     for (size_t i = 0; i < ntracks; i++) {
@@ -295,8 +302,10 @@ int CalibCosmicsAna::analyzeReco(detinfo::DetectorClocksData const& clockData, a
 
 	std::vector<std::pair<const simb::MCParticle*, double> > mc_parts =
 	    GetMCParticleListFromRecoTrack(clockData, *track, evt);
-
-	fCosmicEvent.reco_mcpdg[i] = mc_parts[0].first->PdgCode();
+	if (!mc_parts.size())
+	    fCosmicEvent.reco_mcpdg[i] = -999;
+	else
+	    fCosmicEvent.reco_mcpdg[i] = mc_parts[0].first->PdgCode();
     }
 
 
@@ -317,6 +326,13 @@ int CalibCosmicsAna::analyzeReco(detinfo::DetectorClocksData const& clockData, a
 	    for (auto calo : calos) {
 	    	size_t end = calo->TpIndices().size();
 		int plane = calo->PlaneID().Plane;
+
+		// test size of calorimetry points, not to overflow allocated memory
+		if (end > MAX_TRACK_POINTS) {
+		    cout<<"CalibCosmicsAna: WARNING: Track "<<i<<", in plane"<<plane
+			<<" has "<<end<<" calorimetry points. Will only store "<<MAX_TRACK_POINTS<<endl;
+		    end = MAX_TRACK_POINTS;
+		}
 
 		fCosmicEvent.reco_nPoints[i][plane] = end;
 		// loop over calo points
@@ -446,7 +462,17 @@ double CalibCosmicsAna::length(const simb::MCParticle& p,
 
     int tpindex = 0;
 
-    for(unsigned int i = 0; i < p.NumberTrajectoryPoints(); ++i) {
+    unsigned int size = p.NumberTrajectoryPoints();
+
+    for(unsigned int i = 0; i < size; ++i) {
+	// test number of points to be stored.
+	if (tpindex >= MAX_TRAJECTORY_POINTS) {
+	    cout<<"CalibCosmicsAna: WARNING: MCParticle "<<p.TrackId()<<"/"<<p.PdgCode()
+		<<" has "<<size<<" trajectory points. And more than "<<MAX_TRAJECTORY_POINTS
+		<<" are in TPC active. Will only store "<<MAX_TRAJECTORY_POINTS<<endl;
+	    break;
+	}
+
 	// check if the particle is inside a TPC
 	if (p.Vx(i) >= ActiveBounds[0] && p.Vx(i) <= ActiveBounds[1] && p.Vy(i) >= ActiveBounds[2] && p.Vy(i) <= ActiveBounds[3] && p.Vz(i) >= ActiveBounds[4] && p.Vz(i) <= ActiveBounds[5]){
 	    if(first){

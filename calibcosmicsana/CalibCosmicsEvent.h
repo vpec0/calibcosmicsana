@@ -46,8 +46,8 @@
 
 
 const int MAX_RECO_TRACKS = 100;
-const int MAX_TRACK_POINTS = 25000; // 25 TPC along Z times 1000 wires each
-const int MAX_TRAJECTORY_POINTS = 5000; // looks like trajectory point every ~3 cm
+const int MAX_TRACK_POINTS = 5000; // 25 TPC along Z times 1000 wires each
+const int MAX_TRAJECTORY_POINTS = 2000; // looks like trajectory point every ~3 cm
 
 
 struct CalibCosmicsEvent {
@@ -95,22 +95,55 @@ TTree* createBranches(TTree* tree, CalibCosmicsEvent* evt)
 {
 #define INT(var, title) tree->Branch(#var, &evt->var, #var"/I")
 #define FLOAT(var, title) tree->Branch(#var, &evt->var, #var"/F")
-
-    EVENT_LIST;
-
 #define STRING(var, title) tree->Branch(#var, &evt->var)
 #define FLOAT_4VEC(var, title) tree->Branch(#var, evt->var, #var"[4]/F")
 #define FLOAT_ARR(var, title, size) tree->Branch(#var, evt->var, #var"["#size"]/F")
 #define FLOAT_ARR2D(var, title, size1, size2) tree->Branch(#var, evt->var, Form(#var"["#size1"][%d]/F", size2))
-
-    MC_TRUTH_LIST;
-
 #define INT_ARR(var, title, size) tree->Branch(#var, evt->var, #var"["#size"]/I")
 #define INT_ARR2D(var, title, size1, size2) tree->Branch(#var, evt->var, Form(#var"["#size1"][%d]/I", size2))
 #define FLOAT_ARR3D(var, title, size1, size2, size3) tree->Branch(#var, evt->var, Form(#var"["#size1"][%d][%d]/F", size2, size3))
 #define FLOAT_ARR4D(var, title, size1, size2, size3, size4) tree->Branch(#var, evt->var, Form(#var"["#size1"][%d][%d][%d]/F", size2, size3, size4))
 #define SHORT_ARR3D(var, title, size1, size2, size3) tree->Branch(#var, evt->var, Form(#var"["#size1"][%d][%d]/S", size2, size3))
 
+    EVENT_LIST;
+    MC_TRUTH_LIST;
+    RECO_TRACK_LIST;
+
+    return tree;
+}
+
+
+/// delete the macro definitions
+#undef INT
+#undef INT_ARR
+#undef INT_ARR2D
+#undef FLOAT
+#undef FLOAT_4VEC
+#undef FLOAT_ARR
+#undef FLOAT_ARR2D
+#undef FLOAT_ARR3D
+#undef FLOAT_ARR4D
+#undef STRING
+#undef SHORT_ARR3D
+
+
+/// set addresses for tree branches
+TTree* setAddresses(TTree* tree, CalibCosmicsEvent* evt)
+{
+#define INT(var, title) tree->SetBranchAddress(#var, &evt->var)
+#define FLOAT(var, title) tree->SetBranchAddress(#var, &evt->var)
+#define STRING(var, title) tree->SetBranchAddress(#var, &evt->var)
+#define FLOAT_4VEC(var, title) tree->SetBranchAddress(#var, evt->var)
+#define FLOAT_ARR(var, title, size) tree->SetBranchAddress(#var, evt->var)
+#define FLOAT_ARR2D(var, title, size1, size2) tree->SetBranchAddress(#var, evt->var)
+#define INT_ARR(var, title, size) tree->SetBranchAddress(#var, evt->var)
+#define INT_ARR2D(var, title, size1, size2) tree->SetBranchAddress(#var, evt->var)
+#define FLOAT_ARR3D(var, title, size1, size2, size3) tree->SetBranchAddress(#var, evt->var)
+#define FLOAT_ARR4D(var, title, size1, size2, size3, size4) tree->SetBranchAddress(#var, evt->var)
+#define SHORT_ARR3D(var, title, size1, size2, size3) tree->SetBranchAddress(#var, evt->var)
+
+    EVENT_LIST;
+    MC_TRUTH_LIST;
     RECO_TRACK_LIST;
 
     return tree;
